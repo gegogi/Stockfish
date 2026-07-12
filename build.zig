@@ -32,12 +32,51 @@ pub fn build(b: *Build) !void {
     const stockfish_dep = b.dependency("Stockfish", .{});
     const stockfish_src_path = stockfish_dep.path("src/");
 
+    // Everything main.cpp needs (engine logic, search, NNUE eval, UCI
+    // protocol handling) *except* main.cpp itself -- shared between the
+    // desktop/Android subprocess executable below and the "stockfish_core"
+    // module exposed for a host app to embed directly (see znogfx's
+    // app/chess/stockfish_embed.cpp and uci_engine.zig's Engine.spawnThread).
+    // main.cpp defines `main()`, which would collide with a host app's own
+    // entry point if linked into the same binary, so it's added separately,
+    // only for the standalone `stockfish` executable.
+    const engine_sources = &[_][]const u8{
+        "benchmark.cpp",
+        "bitboard.cpp",
+        "engine.cpp",
+        "evaluate.cpp",
+        "memory.cpp",
+        "misc.cpp",
+        "movegen.cpp",
+        "movepick.cpp",
+        "nnue/features/half_ka_v2_hm.cpp",
+        "nnue/features/full_threats.cpp",
+        "nnue/network.cpp",
+        "nnue/nnue_accumulator.cpp",
+        "nnue/nnue_misc.cpp",
+        "position.cpp",
+        "score.cpp",
+        "search.cpp",
+        "syzygy/tbprobe.cpp",
+        "thread.cpp",
+        "timeman.cpp",
+        "tt.cpp",
+        "tune.cpp",
+        "uci.cpp",
+        "ucioption.cpp",
+    };
+    const nnue_flags = &[_][]const u8{
+        if (embed_nets) "" else "-DNNUE_EMBEDDING_OFF=1",
+    };
+
     const module = b.createModule(.{
         .target = target,
         .optimize = optimize,
         .link_libc = true,
         .link_libcpp = true,
     });
+    module.addCSourceFiles(.{ .root = stockfish_src_path, .files = engine_sources, .flags = nnue_flags });
+    module.addCSourceFile(.{ .file = stockfish_src_path.path(b, "main.cpp"), .flags = nnue_flags });
     const exe = b.addExecutable(.{
         .name = "stockfish",
         .root_module = module,
@@ -62,38 +101,28 @@ pub fn build(b: *Build) !void {
         };
     }
 
-    module.addCSourceFiles(.{
-        .root = stockfish_src_path,
-        .files = &.{
-            "benchmark.cpp",
-            "bitboard.cpp",
-            "engine.cpp",
-            "evaluate.cpp",
-            "main.cpp",
-            "memory.cpp",
-            "misc.cpp",
-            "movegen.cpp",
-            "movepick.cpp",
-            "nnue/features/half_ka_v2_hm.cpp",
-            "nnue/features/full_threats.cpp",
-            "nnue/network.cpp",
-            "nnue/nnue_accumulator.cpp",
-            "nnue/nnue_misc.cpp",
-            "position.cpp",
-            "score.cpp",
-            "search.cpp",
-            "syzygy/tbprobe.cpp",
-            "thread.cpp",
-            "timeman.cpp",
-            "tt.cpp",
-            "tune.cpp",
-            "uci.cpp",
-            "ucioption.cpp",
-        },
-        .flags = &.{
-            if (embed_nets) "" else "-DNNUE_EMBEDDING_OFF=1",
-        },
+    // Library-only variant (no main.cpp, so no `main()` symbol conflict) for
+    // a host app to embed and drive on its own thread. `root_source_file =
+    // null`: this is a pure-C++-sources module with no Zig code of its own.
+    // `addModule` (rather than `createModule`) registers it under a stable
+    // name so a parent build can do `dep.module("stockfish_core")`, append
+    // its own bridge source file (addCSourceFile), and wrap the result in
+    // its own `b.addLibrary(...)` -- see build.zig/build_ios.zig/
+    // build_android.zig.
+    const embed_module = b.addModule("stockfish_core", .{
+        .root_source_file = null,
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .link_libcpp = true,
     });
+    embed_module.addCSourceFiles(.{ .root = stockfish_src_path, .files = engine_sources, .flags = nnue_flags });
+    // So a parent build's own bridge file (e.g. znogfx's
+    // app/chess/stockfish_embed.cpp) can `#include "misc.h"` etc. -- this
+    // source root only resolves correctly from inside *this* build.zig (it
+    // comes from our own nested "Stockfish" dependency), so it must be
+    // attached here rather than left for the consumer to guess a path.
+    embed_module.addIncludePath(stockfish_src_path);
 }
 
 /// The first time we run "zig build", we need to download the necessary nnue files
