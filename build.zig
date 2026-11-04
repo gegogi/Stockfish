@@ -85,12 +85,12 @@ pub fn build(b: *Build) !void {
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| run_cmd.addArgs(args);
+    run_cmd.addPassthruArgs();
 
     const run_step = b.step("run", "Build and run stockfish");
     run_step.dependOn(&run_cmd.step);
 
-    if (optimize != .Debug) {
+    if (optimize != .debug) {
         exe.root_module.pic = true;
         exe.pie = true;
         exe.root_module.omit_frame_pointer = true;
