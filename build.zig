@@ -67,6 +67,10 @@ pub fn build(b: *Build) !void {
     };
     const nnue_flags = &[_][]const u8{
         if (embed_nets) "" else "-DNNUE_EMBEDDING_OFF=1",
+        // misc.cpp's engine_version_info() falls back to __DATE__ when
+        // GIT_DATE is undefined; zig rejects that macro as non-reproducible
+        // in release builds. The value only shows in "dev" version strings.
+        "-DGIT_DATE=00000000",
     };
 
     const module = b.createModule(.{
